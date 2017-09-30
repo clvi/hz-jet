@@ -6,7 +6,7 @@ Discovery of HazelCast Jet, and slides of a 15-minutes talk about it (in French 
 
 ![Licence Creative Commons](https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png)
 
-Ce tutoriel est mis à disposition selon les termes de la [licence CC-BY-NC-SA 4.0 International](http://creativecommons.org/licenses/by-nc-sa/4.0/).
+Le contenu de ce dépôt est mis à disposition selon les termes de la [licence CC-BY-NC-SA 4.0 International](http://creativecommons.org/licenses/by-nc-sa/4.0/).
 
 ### Vous êtes autorisé à :
 
