@@ -14,19 +14,137 @@
         font-weight: normal;
       }
       .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+
+        td.logo {
+            text-align: center;
+            padding-right: 10px
+        }
+
+        div.portrait {
+            max-width: 30%;
+            padding-left: 35%;
+        }
+
+        img {
+            max-width: 100%;
+            max-height: 100%;
+        }
     </style>
   </head>
   <body>
-    <textarea id="source">
+<textarea id="source">
 
 class: center, middle
 
 # Stream Processing en mémoire avec HazelCast Jet
 
+### Claire Villard
+
+[![Twitter](images/twitter.png)](https://twitter.com/neur0nia) neur0nia
+
+[![GitHub](images/github.png)](https://github.com/leneurone/hz-jet) leneurone/hz-jet
+
 ---
 
+# Claire Villard
 
-    </textarea>
+<table>
+    <tr>
+        <td class="logo"><a href="http://v3d.fr"><img src="images/v3d.png"></a></td>
+        <td>Développeuse Java depuis 2011 <br/>
+            Société V3D</td>
+    </tr>
+    <tr>
+        <td class="logo"><a href="https://hazelcast.org/"><img src="images/hz.jpg"></a></td>
+        <td>Travaille avec HazelCast IMDG depuis 2 ans</td>
+    </tr>
+    <tr>
+        <td class="logo"><a href="http://www.duchess-france.org/"><img src="images/duchess.png"></a></td>
+        <td>Membre de Duchess France</td>
+    </tr>
+    <tr>
+        <td class="logo"><a href="http://www.lyonjug.org/"><img src="images/lyonjug.png"></a></td>
+        <td>Organisatrice du LyonJUG</td>
+    </tr>
+</table>
+
+
+.portrait[
+![Claire Villard](images/claire_villard.jpg)
+]
+
+---
+
+# Qu'est-ce qu'HazelCast IMDG ?
+
+![HazelCast IMDG](images/hz.jpg)
+
+* IMDG = In-Memory Data Grid, Grille de données en mémoire
+
+* Stockage distribué de structures de données (`Map`, `List`, `AtomicLong`, ...)
+
+* Calcul distribué sur ces structures
+
+* Clustering
+
+* Java-based
+
+---
+
+# Qu'est-ce qu'HazelCast Jet ?
+
+![HazelCast Jet](images/jet.png)
+
+* Solution de stream et batch processing basée sur HazelCast IMDG
+
+.center[![Jet pipeline](images/jet-pipe.png)]
+
+.footnote[_Sauf mention contraire, les schémas proviennent de https://jet.hazelcast.org/_]
+---
+
+# Modélisation
+
+* Utilise les graphes orientés acycliques (DAG, Directed Acyclic Graphs)
+
+.center[![Distributed DAG](images/distributed-DAG.png)]
+
+---
+
+# Fonctionnalités
+
+* Entrées / sorties : streams (IOT, APIs, Kafka Streams, ...), clusters IMDG, databases, HDFS, files, ...
+
+* Faible latence : pas de regroupement de messages en mini-batchs ("one event per time")
+
+* Contrôle du débit de messages
+
+* Tolérance aux crashs de noeuds avec redémarrage des jobs (v0.5)
+
+* Garantie de traitement "au moins 1", "exactement 1" ou "au mieux" des messages (v0.5)
+
+* Support des traitements batchs comme des streams finis
+
+---
+
+# Roadmap
+
+* Déjà annoncé _production-ready_
+
+* Release 0.5 : octobre 2017
+
+* 1.0 : prévue début 2018
+
+* APIs instables jusqu'à la v1.0
+
+---
+
+# Let's code !
+
+_TODO_
+
+
+
+</textarea>
     <script src="https://remarkjs.com/downloads/remark-latest.min.js" type="text/javascript">
     </script>
     <script type="text/javascript">
