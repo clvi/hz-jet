@@ -140,12 +140,107 @@ class: center, middle
 
 # Let's code !
 
-_TODO_
+```java
+DAG dag = new DAG();
+
+Vertex source = dag.newVertex("source", Sources.readMap("sourceMap"));
+
+Vertex enricher =
+        dag.newVertex("enricher", () -> new MetricEnricher("customers"));
+
+Vertex output = dag.newVertex("output", Sinks.writeMap("outputMap"));
+
+Vertex errorOutput =
+        dag.newVertex("errorOutput", Sinks.writeMap("errorOutputMap"));
+
+dag
+        .edge(Edge.between(source, enricher))
+        .edge(Edge.from(enricher, 0).to(output))
+        .edge(Edge.from(enricher, 1).to(errorOutput));
+```
+
+???
+
+TODO Watermark ? (with windows)
+
+---
+
+# Metric enricher
+
+```java
+public class MetricEnricher extends AbstractProcessor {
+
+	private IMap<Integer, Customer> customerMap; // The map of Customers
+
+	@Override
+	protected void init(@Nonnull Context context) throws Exception {
+		HazelcastInstance hzInstance = context.jetInstance().getHazelcastInstance();
+		customerMap = hzInstance.getMap("customers");
+	}
+
+	@Override
+	protected boolean tryProcess0(@Nonnull Object item) throws Exception {
+        Map.Entry entry = (Map.Entry) item;
+        Metric metric = (Metric) entry.getValue();
+        Customer customer = customerMap.get(metric.getCustomerId());
+        if (customer != null) {
+            return tryEmit(0,
+                    new AbstractMap.SimpleEntry<>(
+                            entry.getKey(),
+                            new EnrichedMetric(metric, customer)));
+        } else {
+            return tryEmit(1, item); // customer not found
+        }
+	}
+}
+```
+
+???
+
+`item` est de type `Map.Entry` car le `Vertex` source lit une `Map`.
+
+`tryEmit` renvoie `false` si l'output concerné est plein et ne peut accepter de nouvel item. Le moteur va flusher l'output
+concerné, puis soumettre de nouveau l'item en entrée du `Processor`.
+
+Il faudrait ajouter un contrôle avant de caster.
+
+---
+
+# Performances
+
+Lancement du `DAG` présenté avec 1 million de `Metric` en entrée
+
+Machine utilisée :
+
+* Intel® Core™ i7-5600U CPU @ 2.60GHz × 4
+* 16Go RAM
+* Fedora 26 64 bits
+* JVM Oracle HotSpot 1.8.0_121
+
+Configuration de Jet par défaut, 2 noeuds locaux
+
+Temps moyen d'exécution du Job : **22s**, soit environ **45 400 items / seconds**
+
+---
+
+# Quelques limitations
+
+* Pas de typage des entrées, sorties, ou arêtes entre noeuds, tout est `Object`.
+
+???
+
+Tous les vertex recoivent des `Object`s comme unique type manipulé, le type réel doit donc toujours être contrôlé manuellement
+
+---
+
+class: center, middle
+
+# Merci !
 
 
 
 </textarea>
-    <script src="https://remarkjs.com/downloads/remark-latest.min.js" type="text/javascript">
+    <script src="js/remark-latest.min.js" type="text/javascript">
     </script>
     <script type="text/javascript">
       var slideshow = remark.create();
