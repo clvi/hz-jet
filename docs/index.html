@@ -136,17 +136,23 @@ class: center, middle
 
 # Fonctionnalités
 
-* Entrées / sorties : streams (IOT, APIs, Kafka Streams, ...), clusters IMDG, databases, HDFS, files, ...
+* Nombreuses entrées / sorties
 
-* Faible latence : pas de regroupement de messages en mini-batchs ("one event per time")
+* Faible latence
 
-* Contrôle du débit de messages
-
-* Tolérance aux crashs de noeuds avec redémarrage des jobs (v0.5)
-
-* Garantie de traitement "au moins 1", "exactement 1" ou "au mieux" des messages (v0.5)
+* Contrôle du débit
 
 * Support des traitements batchs comme des streams finis
+
+En v0.5 :
+
+* Tolérance aux crashs de noeuds avec redémarrage des jobs
+
+* Garantie de traitement "au moins 1", "exactement 1" ou "au mieux" des messages
+
+???
+
+Entrées / sorties : streams (IOT, APIs, Kafka Streams, ...), clusters IMDG, databases, HDFS, files, ...
 
 ---
 
@@ -167,60 +173,64 @@ class: center, middle
 ```java
 DAG dag = new DAG();
 
-Vertex source = dag.newVertex("source", Sources.readMap("sourceMap"));
-
-Vertex enricher = dag.newVertex("enricher", () -> new MetricEnricher("customers"));
-
+// Création des noeuds de traitement
+Vertex source = dag.newVertex("source", Sources.readMap("inputMap"));
+Vertex enricher = dag.newVertex("enricher", MetricEnricher::new);
 Vertex output = dag.newVertex("output", Sinks.writeMap("outputMap"));
 
-Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap("errorOutputMap"));
-
+// Création des arêtes du graphe entre les noeuds
 dag
         .edge(Edge.between(source, enricher))
-        .edge(Edge.from(enricher, 0).to(output))
-        .edge(Edge.from(enricher, 1).to(errorOutput));
+        .edge(Edge.from(enricher, 0).to(output));
+
+// Démarrage de Jet
+JetInstance jet = Jet.newJetInstance();
+
+// Démarrage du Job et attente du résultat
+jet.newJob(dag).execute().get();
 ```
 
 ???
 
-TODO Watermark ? (with windows)
-TODO graphical representation of the DAG
+On peut choisir l'indice de chaque entrée et sortie des noeuds.
+
+Utile quand un noeud a plusieurs entrées ou sorties.
+
+`between` fix les ID d'entrée et sortie à 0.
 
 ---
 
-# Metric enricher
+# Processor
 
 ```java
 public class MetricEnricher extends AbstractProcessor {
 
-	private IMap<Integer, Customer> customerMap; // The map of Customers
+	private IMap<Integer, Customer> customerMap; // IMap des Customers
 
 	@Override
 	protected void init(@Nonnull Context context) throws Exception {
-		HazelcastInstance hzInstance = context.jetInstance().getHazelcastInstance();
-		customerMap = hzInstance.getMap("customers");
+        // Utilisation de l'instance HazelCast sous-jacente
+		customerMap = context.jetInstance().getHazelcastInstance().getMap("customers");
 	}
 
 	@Override
 	protected boolean tryProcess0(@Nonnull Object item) throws Exception {
-        Map.Entry entry = (Map.Entry) item;
-        Metric metric = (Metric) entry.getValue();
+        Metric metric = (Metric) item;
 
+        // On tente de trouver le customer associé à la métrique dans une IMap
         Customer customer = customerMap.get(metric.getCustomerId());
 
+        // On choisit l'arête du graphe à utiliser
         if (customer != null) {
-            return tryEmit(0,
-                    new AbstractMap.SimpleEntry<>(entry.getKey(), new EnrichedMetric(metric, customer)));
+            return tryEmit(0, new EnrichedMetric(metric, customer));
         } else {
-            return tryEmit(1, item); // customer not found
+            return tryEmit(1, metric);
         }
 	}
 }
 ```
 
 ???
-
-`item` est de type `Map.Entry` car le `Vertex` source lit une `Map`.
 
 `tryEmit` renvoie `false` si l'output concerné est plein et ne peut accepter de nouvel item. Le moteur va flusher l'output
 concerné, puis soumettre de nouveau l'item en entrée du `Processor`.
@@ -229,26 +239,93 @@ Il faudrait ajouter un contrôle avant de caster.
 
 ---
 
+# Stream Processing
+
+```java
+public class QueuePoller extends AbstractProcessor {
+	private IQueue<Metric> inputQueue; // Queue d'entrée
+
+	@Override
+	protected void init(@Nonnull Context context) throws Exception {
+		inputQueue = context.jetInstance().getHazelcastInstance().getQueue("inputQueue");
+	}
+
+    // Utilisation d'un thread dédié obligatoire car poll(int, TimeUnit) est bloquante
+	public QueuePoller() { setCooperative(false); }
+
+	@Override
+	public boolean complete() {
+		try {
+			Metric metric = inputQueue.poll(20, TimeUnit.MILLISECONDS);
+			if(metric != null) {
+				tryEmit(metric);
+			}
+			return false; // execution infinie tant que complete() retourne false
+		} catch (Exception e) {
+			return true; // arrêt de l'exécution
+		}
+    }
+}
+```
+
+???
+
+Le poller bloque le thread sur la méthode `poll()`, il ne doit pas être coopératif pour ne pas bloquer d'autres threads.
+
+Utilisation de la méthode `poll(long, TimeUnit)` pour pouvoir interrompre l'exécution avec `Future.cancel()`, ou un flag d'arrêt
+
+La métrique est null si le timeout a expiré. Si on ne parvient pas à émettre l'évènement, on attend un peu et on retente.
+
+Si le poller retourne `false` il sera rappelé par le moteur jusqu'à ce qu'il retourne `true` ou que le job soit arrêté.
+
+---
+
 # Performances
-
-Lancement du `DAG` présenté avec 1 million de `Metric` en entrée
-
-Machine utilisée :
 
 * Intel® Core™ i7-5600U CPU @ 2.60GHz × 4
 * 16Go RAM
 * Fedora 26 64 bits
 * JVM Oracle HotSpot 1.8.0_121
+* Configuration de Jet par défaut, 2 noeuds locaux
 
-Configuration de Jet par défaut, 2 noeuds locaux
+### Batch processing - 1 million de `Metric`
 
-Temps moyen d'exécution du Job : **22s**, soit environ **45 400 items / seconds**
+Temps moyen d'exécution du Job : **22s**, soit environ **45 400 items / seconde**
+
+### Stream processing
+
+Injection de `Metric` dans la queue et calcul de la latence totale
+
+Latence moyenne : **2 ms**, latence max. sur 100 000 éléments : **27 ms**
+
+???
+
+TODO graphical representation of the DAG
 
 ---
 
-# Quelques limitations
+# Sliding Windows
+
+* Calcul de valeurs aggrégées sur des fenêtres de temps glissantes
+
+* Exemple : _"Quelle est le nombre de métriques reçues par Customer sur les N dernières minutes ?"_
+
+* Utilisation de _watermark_
+
+* Pattern Map-Reduce
+
+---
+
+# Limitations
+
+
+* Qualité de la documentation...
 
 * Pas de typage des entrées, sorties, ou arêtes entre noeuds, tout est `Object`.
+
+.center[
+![Type casting everywhere](images/type-casting-type-casting-everywhere.jpg)
+]
 
 ???
 
