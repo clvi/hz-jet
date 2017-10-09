@@ -190,6 +190,10 @@ JetInstance jet = Jet.newJetInstance();
 jet.newJob(dag).execute().get();
 ```
 
+.center[
+![Simple DAG](images/dag.png)
+]
+
 ???
 
 On peut choisir l'indice de chaque entrée et sortie des noeuds.
@@ -297,10 +301,6 @@ Temps moyen d'exécution du Job : **22s**, soit environ **45 400 items / seconde
 Injection de `Metric` dans la queue et calcul de la latence totale
 
 Latence moyenne : **2 ms**, latence max. sur 100 000 éléments : **27 ms**
-
-???
-
-TODO graphical representation of the DAG
 
 ---
 
