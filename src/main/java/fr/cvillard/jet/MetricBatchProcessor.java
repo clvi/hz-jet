@@ -6,13 +6,17 @@ import com.hazelcast.jet.Edge;
 import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
 import com.hazelcast.jet.Vertex;
+import com.hazelcast.jet.function.DistributedFunction;
+import com.hazelcast.jet.processor.Processors;
 import com.hazelcast.jet.processor.Sinks;
 import com.hazelcast.jet.processor.Sources;
 import com.hazelcast.jet.stream.IStreamMap;
 import com.hazelcast.logging.ILogger;
 
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -85,7 +89,7 @@ public class MetricBatchProcessor {
 		ThreadLocalRandom rnd = ThreadLocalRandom.current();
 		// initialize timestamp to now - 5s
 		final long startTimeMs = System.currentTimeMillis() - 5 * 1000;
-		// parallelize map loading to fully use CPU
+		// parallel map loading to fully use CPU
 		int nbCPUs = Runtime.getRuntime().availableProcessors();
 		ExecutorService service = Executors.newFixedThreadPool(nbCPUs * 2);
 		List<Future> futures = new ArrayList<>(10);
@@ -94,7 +98,7 @@ public class MetricBatchProcessor {
 		while (maxIdx < NB_ITEMS) {
 			int startIdx = maxIdx + 1;
 			// intermediate variable localMaxIdx is necessary to have effectively final variable in lambda expression
-			int localMaxIdx = startIdx + 100_000;
+			int localMaxIdx = startIdx + Math.min(100_000, NB_ITEMS);
 			maxIdx = localMaxIdx;
 			futures.add(service.submit(() -> {
 				for (int i = startIdx; i < localMaxIdx; i++) {
@@ -102,7 +106,7 @@ public class MetricBatchProcessor {
 					final int nbCalls = rnd.nextInt(10) + 1;
 					final long metricTimeMs = startTimeMs - i; // ensure there is no collision since timestamp is the key on the input map
 					// we voluntarily generate some metrics with non existing customers to see error output in action
-					inputMap.put(Long.toString(metricTimeMs), new Metric(metricTimeMs, rnd.nextInt(NB_CUSTOMERS + 5),
+					inputMap.set(Long.toString(metricTimeMs), new Metric(metricTimeMs, rnd.nextInt(NB_CUSTOMERS + 5),
 							nbCalls, rnd.nextInt(nbCalls)));
 				}
 			}));
@@ -118,14 +122,25 @@ public class MetricBatchProcessor {
 		DAG dag = new DAG();
 		// this standard vertex does NOT remove items from input map, so you have to do it yourself when it suits you
 		Vertex source = dag.newVertex("source", Sources.readMap(SOURCE_MAP_NAME));
+		// transform map entries to values since we do not need the key
+		Vertex valueMapper = dag.newVertex("mapper",
+				Processors.map((DistributedFunction<Map.Entry<String, Metric>, Metric>) Map.Entry::getValue));
+		// enrich metrics with customers and transform them to EnrichedMetric
 		Vertex enricher = dag.newVertex("enricher", () -> new MetricEnricher(CUSTOMER_MAP_NAME));
+		// transform EnrichedMetric to Map entry
+		Vertex outputMapper = dag.newVertex("outputMapper",
+				Processors.map((EnrichedMetric m) -> new AbstractMap.SimpleEntry<>(m.getMetric().getTimestampMs(), m)));
+		// output to map
 		Vertex output = dag.newVertex("output", Sinks.writeMap(OUTPUT_MAP_NAME));
+		// output error to another map
 		Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap(ERROR_OUTPUT_MAP_NAME));
 
 		dag
-				.edge(Edge.between(source, enricher))
+				.edge(Edge.between(source, valueMapper))
+				.edge(Edge.between(valueMapper, enricher))
 				// we need to control the ordinal of the output here to send items to the right output
-				.edge(Edge.from(enricher, MetricEnricher.NORMAL_OUTPUT_ORDINAL).to(output))
+				.edge(Edge.from(enricher, MetricEnricher.NORMAL_OUTPUT_ORDINAL).to(outputMapper))
+				.edge(Edge.between(outputMapper, output))
 				// the enricher will dispatch items between normal and error output
 				.edge(Edge.from(enricher, MetricEnricher.ERROR_OUTPUT_ORDINAL).to(errorOutput));
 
@@ -140,5 +155,8 @@ public class MetricBatchProcessor {
 
 		// Shutdown Jet instances
 		Jet.shutdownAll();
+
+		// exit cleanly
+		System.exit(0);
 	}
 }

@@ -37,6 +37,20 @@ public class EnrichedMetric implements DataSerializable {
 		this.customer = customer;
 	}
 
+	/**
+	 * @return metric
+	 */
+	public Metric getMetric() {
+		return metric;
+	}
+
+	/**
+	 * @param metric Value of metric
+	 */
+	public void setMetric(Metric metric) {
+		this.metric = metric;
+	}
+
 	@Override
 	public void writeData(ObjectDataOutput out) throws IOException {
 		if(metric != null) {
