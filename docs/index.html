@@ -109,6 +109,8 @@ class: center, middle
 
 * Java-based
 
+* Open-source
+
 ---
 
 # Qu'est-ce qu'HazelCast Jet ?
@@ -144,6 +146,12 @@ class: center, middle
 
 * Support des traitements batchs comme des streams finis
 
+* _Sliding windows_
+
+* Facilement extensible
+
+<br />
+
 En v0.5 :
 
 * Tolérance aux crashs de noeuds avec redémarrage des jobs
@@ -154,11 +162,15 @@ En v0.5 :
 
 Entrées / sorties : streams (IOT, APIs, Kafka Streams, ...), clusters IMDG, databases, HDFS, files, ...
 
+Sliding Windows: Calcul de valeurs aggrégées sur des fenêtres de temps glissantes, avec _watermark_ et Map-Reduce
+
 ---
 
 # Roadmap
 
 * Déjà annoncé _production-ready_
+
+* v0.4 sortie le 14 juin 2017
 
 * Release 0.5 : octobre 2017
 
@@ -168,20 +180,32 @@ Entrées / sorties : streams (IOT, APIs, Kafka Streams, ...), clusters IMDG, dat
 
 ---
 
-# Let's code !
+class: center, middle
+
+# En pratique
+
+![DAG](images/dag.png)
+
+---
+
+# DAG
 
 ```java
 DAG dag = new DAG();
 
 // Création des noeuds de traitement
 Vertex source = dag.newVertex("source", Sources.readMap("inputMap"));
+
 Vertex enricher = dag.newVertex("enricher", MetricEnricher::new);
+
 Vertex output = dag.newVertex("output", Sinks.writeMap("outputMap"));
+Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap("errorOutputMap"));
 
 // Création des arêtes du graphe entre les noeuds
 dag
         .edge(Edge.between(source, enricher))
-        .edge(Edge.from(enricher, 0).to(output));
+        .edge(Edge.from(enricher, 0).to(output))
+        .edge(Edge.from(enricher, 1).to(errorOutput));
 
 // Démarrage de Jet
 JetInstance jet = Jet.newJetInstance();
@@ -189,10 +213,6 @@ JetInstance jet = Jet.newJetInstance();
 // Démarrage du Job et attente du résultat
 jet.newJob(dag).execute().get();
 ```
-
-.center[
-![Simple DAG](images/dag.png)
-]
 
 ???
 
@@ -304,18 +324,6 @@ Latence moyenne : **2 ms**, latence max. sur 100 000 éléments : **27 ms**
 
 ---
 
-# Sliding Windows
-
-* Calcul de valeurs aggrégées sur des fenêtres de temps glissantes
-
-* Exemple : _"Quelle est le nombre de métriques reçues par Customer sur les N dernières minutes ?"_
-
-* Utilisation de _watermark_
-
-* Pattern Map-Reduce
-
----
-
 # Limitations
 
 
@@ -337,6 +345,7 @@ class: center, middle
 
 # Merci !
 
+[![GitHub](images/github.png) leneurone/hz-jet](https://github.com/leneurone/hz-jet)
 
 
 </textarea>
