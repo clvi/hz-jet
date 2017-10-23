@@ -49,6 +49,11 @@
           max-width: 75%;
           padding-left: 12%;
       }
+
+      .dag-icon {
+          float: right;
+          width: 320px;
+      }
     </style>
   </head>
   <body>
@@ -77,10 +82,6 @@ class: center, middle
         <td class="portrait" rowspan="4">
             <img alt="Claire Villard" src="images/claire_villard.jpg"/>
         </td>
-    </tr>
-    <tr>
-        <td class="logo"><a href="https://hazelcast.org/"><img src="images/hz.jpg"></a></td>
-        <td>Travaille avec HazelCast IMDG depuis 2 ans</td>
     </tr>
     <tr>
         <td class="logo"><a href="http://www.duchess-france.org/"><img src="images/duchess.png"></a></td>
@@ -188,6 +189,8 @@ class: center, middle
 
 ---
 
+.dag-icon[![DAG](images/dag.png)]
+
 # DAG
 
 ```java
@@ -223,6 +226,8 @@ Utile quand un noeud a plusieurs entrées ou sorties.
 `between` fix les ID d'entrée et sortie à 0.
 
 ---
+
+.dag-icon[![DAG](images/dag.png)]
 
 # Processor
 
@@ -262,6 +267,8 @@ concerné, puis soumettre de nouveau l'item en entrée du `Processor`.
 Il faudrait ajouter un contrôle avant de caster.
 
 ---
+
+.dag-icon[![DAG](images/dag-stream.png)]
 
 # Stream Processing
 
@@ -312,9 +319,13 @@ Si le poller retourne `false` il sera rappelé par le moteur jusqu'à ce qu'il r
 * JVM Oracle HotSpot 1.8.0_121
 * Configuration de Jet par défaut, 2 noeuds locaux
 
+.dag-icon[![DAG](images/dag.png)]
+
 ### Batch processing - 1 million de `Metric`
 
 Temps moyen d'exécution du Job : **22s**, soit environ **45 400 items / seconde**
+
+.dag-icon[![DAG](images/dag-stream.png)]
 
 ### Stream processing
 
