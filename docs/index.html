@@ -61,7 +61,9 @@
 
 class: center, middle
 
-# Stream Processing en mémoire avec HazelCast Jet
+# Stream Processing en mémoire
+
+# avec HazelCast Jet
 
 ### Claire Villard
 
@@ -173,7 +175,7 @@ Sliding Windows: Calcul de valeurs aggrégées sur des fenêtres de temps glissa
 
 * v0.4 sortie le 14 juin 2017
 
-* Release 0.5 : octobre 2017
+* Release 0.5 : octobre 2017... ?
 
 * 1.0 : prévue début 2018
 
@@ -203,13 +205,17 @@ Vertex enricher = dag.newVertex("enricher", MetricEnricher::new);
 
 Vertex output = dag.newVertex("output", Sinks.writeMap("outputMap"));
 Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap("errorOutputMap"));
+```
 
+```java
 // Création des arêtes du graphe entre les noeuds
 dag
         .edge(Edge.between(source, enricher))
         .edge(Edge.from(enricher, 0).to(output))
         .edge(Edge.from(enricher, 1).to(errorOutput));
+```
 
+```java
 // Démarrage de Jet
 JetInstance jet = Jet.newJetInstance();
 
@@ -234,27 +240,23 @@ Utile quand un noeud a plusieurs entrées ou sorties.
 ```java
 public class MetricEnricher extends AbstractProcessor {
 
-	private IMap<Integer, Customer> customerMap; // IMap des Customers
-
-	@Override
-	protected void init(@Nonnull Context context) throws Exception {
-        // Utilisation de l'instance HazelCast sous-jacente
-		customerMap = context.jetInstance().getHazelcastInstance().getMap("customers");
-	}
+	// ...
 
 	@Override
 	protected boolean tryProcess0(@Nonnull Object item) throws Exception {
+
         Metric metric = (Metric) item;
 
-        // On tente de trouver le customer associé à la métrique dans une IMap
-        Customer customer = customerMap.get(metric.getCustomerId());
+        // ... on fait des traitements
 
-        // On choisit l'arête du graphe à utiliser
-        if (customer != null) {
-            return tryEmit(0, new EnrichedMetric(metric, customer));
-        } else {
-            return tryEmit(1, metric);
-        }
+        // Arête 0 ou 1 selon que le traitement s'est terminé en succès ou non
+        int index = (error ? 1 : 0);
+
+        // si la sortie est surchargée, tryEmit renverra false
+        boolean emissionSucceeded = tryEmit(index, metric);
+
+        // le process sera retenté si on retourne false
+        return emissionSucceeded;
 	}
 }
 ```
@@ -274,27 +276,20 @@ Il faudrait ajouter un contrôle avant de caster.
 
 ```java
 public class QueuePoller extends AbstractProcessor {
-	private IQueue<Metric> inputQueue; // Queue d'entrée
 
-	@Override
-	protected void init(@Nonnull Context context) throws Exception {
-		inputQueue = context.jetInstance().getHazelcastInstance().getQueue("inputQueue");
-	}
-
-    // Utilisation d'un thread dédié obligatoire car poll(int, TimeUnit) est bloquante
-	public QueuePoller() { setCooperative(false); }
+    // ...
 
 	@Override
 	public boolean complete() {
-		try {
-			Metric metric = inputQueue.poll(20, TimeUnit.MILLISECONDS);
-			if(metric != null) {
-				tryEmit(metric);
-			}
-			return false; // execution infinie tant que complete() retourne false
-		} catch (Exception e) {
-			return true; // arrêt de l'exécution
-		}
+
+        Metric metric = inputQueue.poll(20, TimeUnit.MILLISECONDS);
+
+        if(metric != null) {
+            // on envoie le message dans le pipeline de traitement
+            tryEmit(metric);
+        }
+
+        return false; // execution infinie tant que complete() retourne false
     }
 }
 ```
