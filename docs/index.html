@@ -147,15 +147,9 @@ class: center, middle
 
 * Contrôle du débit
 
-* Support des traitements batchs comme des streams finis
-
 * _Sliding windows_
 
 * Facilement extensible
-
-<br />
-
-En v0.5 :
 
 * Tolérance aux crashs de noeuds avec redémarrage des jobs
 
@@ -173,136 +167,11 @@ Sliding Windows: Calcul de valeurs aggrégées sur des fenêtres de temps glissa
 
 * Déjà annoncé _production-ready_
 
-* v0.4 sortie le 14 juin 2017
-
-* Release 0.5 : octobre 2017... ?
+* v0.5 sortie le 26 novembre 2017
 
 * 1.0 : prévue début 2018
 
 * APIs instables jusqu'à la v1.0
-
----
-
-class: center, middle
-
-# En pratique
-
-![DAG](images/dag.png)
-
----
-
-.dag-icon[![DAG](images/dag.png)]
-
-# DAG
-
-```java
-DAG dag = new DAG();
-
-// Création des noeuds de traitement
-Vertex source = dag.newVertex("source", Sources.readMap("inputMap"));
-
-Vertex enricher = dag.newVertex("enricher", MetricEnricher::new);
-
-Vertex output = dag.newVertex("output", Sinks.writeMap("outputMap"));
-Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap("errorOutputMap"));
-```
-
-```java
-// Création des arêtes du graphe entre les noeuds
-dag
-        .edge(Edge.between(source, enricher))
-        .edge(Edge.from(enricher, 0).to(output))
-        .edge(Edge.from(enricher, 1).to(errorOutput));
-```
-
-```java
-// Démarrage de Jet
-JetInstance jet = Jet.newJetInstance();
-
-// Démarrage du Job et attente du résultat
-jet.newJob(dag).execute().get();
-```
-
-???
-
-On peut choisir l'indice de chaque entrée et sortie des noeuds.
-
-Utile quand un noeud a plusieurs entrées ou sorties.
-
-`between` fix les ID d'entrée et sortie à 0.
-
----
-
-.dag-icon[![DAG](images/dag.png)]
-
-# Processor
-
-```java
-public class MetricEnricher extends AbstractProcessor {
-
-	// ...
-
-	@Override
-	protected boolean tryProcess0(@Nonnull Object item) throws Exception {
-
-        Metric metric = (Metric) item;
-
-        // ... on fait des traitements
-
-        // Arête 0 ou 1 selon que le traitement s'est terminé en succès ou non
-        int index = (error ? 1 : 0);
-
-        // si la sortie est surchargée, tryEmit renverra false
-        boolean emissionSucceeded = tryEmit(index, metric);
-
-        // le process sera retenté si on retourne false
-        return emissionSucceeded;
-	}
-}
-```
-
-???
-
-`tryEmit` renvoie `false` si l'output concerné est plein et ne peut accepter de nouvel item. Le moteur va flusher l'output
-concerné, puis soumettre de nouveau l'item en entrée du `Processor`.
-
-Il faudrait ajouter un contrôle avant de caster.
-
----
-
-.dag-icon[![DAG](images/dag-stream.png)]
-
-# Stream Processing
-
-```java
-public class QueuePoller extends AbstractProcessor {
-
-    // ...
-
-	@Override
-	public boolean complete() {
-
-        Metric metric = inputQueue.poll(20, TimeUnit.MILLISECONDS);
-
-        if(metric != null) {
-            // on envoie le message dans le pipeline de traitement
-            tryEmit(metric);
-        }
-
-        return false; // execution infinie tant que complete() retourne false
-    }
-}
-```
-
-???
-
-Le poller bloque le thread sur la méthode `poll()`, il ne doit pas être coopératif pour ne pas bloquer d'autres threads.
-
-Utilisation de la méthode `poll(long, TimeUnit)` pour pouvoir interrompre l'exécution avec `Future.cancel()`, ou un flag d'arrêt
-
-La métrique est null si le timeout a expiré. Si on ne parvient pas à émettre l'évènement, on attend un peu et on retente.
-
-Si le poller retourne `false` il sera rappelé par le moteur jusqu'à ce qu'il retourne `true` ou que le job soit arrêté.
 
 ---
 
