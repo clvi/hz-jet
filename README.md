@@ -1,6 +1,10 @@
 # hz-jet
 Discovery of HazelCast Jet, and slides of a 15-minutes talk about it (in French ! :fr: )
 
+The slides are [published online](https://leneurone.github.io/hz-jet/#1), using GitHub Pages.
+
+Here is a [YouTube vidéo](https://www.youtube.com/watch?v=MU2P6qpITM4) of this talk, given during the Blend Web Mix conference at Lyon, on 2017, October 27th.
+
 
 ## Licence
 
