@@ -1,16 +1,14 @@
 package fr.cvillard.jet;
 
 import com.hazelcast.core.IMap;
-import com.hazelcast.jet.DAG;
-import com.hazelcast.jet.Edge;
+import com.hazelcast.jet.IMapJet;
 import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
-import com.hazelcast.jet.Vertex;
-import com.hazelcast.jet.function.DistributedFunction;
-import com.hazelcast.jet.processor.Processors;
-import com.hazelcast.jet.processor.Sinks;
-import com.hazelcast.jet.processor.Sources;
-import com.hazelcast.jet.stream.IStreamMap;
+import com.hazelcast.jet.pipeline.BatchStage;
+import com.hazelcast.jet.pipeline.JoinClause;
+import com.hazelcast.jet.pipeline.Pipeline;
+import com.hazelcast.jet.pipeline.Sinks;
+import com.hazelcast.jet.pipeline.Sources;
 import com.hazelcast.logging.ILogger;
 
 import java.util.AbstractMap;
@@ -85,7 +83,7 @@ public class MetricBatchProcessor {
 		}
 
 		// preload map of metrics
-		IStreamMap<String, Metric> inputMap = jet.getMap(SOURCE_MAP_NAME);
+		IMapJet<String, Metric> inputMap = jet.getMap(SOURCE_MAP_NAME);
 		ThreadLocalRandom rnd = ThreadLocalRandom.current();
 		// initialize timestamp to now - 5s
 		final long startTimeMs = System.currentTimeMillis() - 5 * 1000;
@@ -118,34 +116,40 @@ public class MetricBatchProcessor {
 
 		logger.info("Initial loading done, will start Jet Job...");
 
-		// treatment dag
-		DAG dag = new DAG();
-		// this standard vertex does NOT remove items from input map, so you have to do it yourself when it suits you
-		Vertex source = dag.newVertex("source", Sources.readMap(SOURCE_MAP_NAME));
-		// transform map entries to values since we do not need the key
-		Vertex valueMapper = dag.newVertex("mapper",
-				Processors.map((DistributedFunction<Map.Entry<String, Metric>, Metric>) Map.Entry::getValue));
-		// enrich metrics with customers and transform them to EnrichedMetric
-		Vertex enricher = dag.newVertex("enricher", () -> new MetricEnricher(CUSTOMER_MAP_NAME));
-		// transform EnrichedMetric to Map entry
-		Vertex outputMapper = dag.newVertex("outputMapper",
-				Processors.map((EnrichedMetric m) -> new AbstractMap.SimpleEntry<>(m.getMetric().getTimestampMs(), m)));
-		// output to map
-		Vertex output = dag.newVertex("output", Sinks.writeMap(OUTPUT_MAP_NAME));
-		// output error to another map
-		Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap(ERROR_OUTPUT_MAP_NAME));
+		// treatment pipeline
+		Pipeline p = Pipeline.create();
+		// prepare customer enrichment
+		// WARN: the full content of this map will be processed and stored in hashmaps on all the nodes, to make the hash join fast
+		// do not forget to consider this when estimating RAM consumption of the Job
+		BatchStage<Map.Entry<Integer, Customer>> customerEntries = p.drawFrom(Sources.map(CUSTOMER_MAP_NAME));
+		// this standard source does NOT remove items from input map, so you have to do it yourself when it suits you
+		BatchStage<EnrichedMetric> enrichedStage = p
+				.drawFrom(Sources.<String, Metric>map(SOURCE_MAP_NAME))
+				// transform map entries to values since we do not need the key
+				.map(Map.Entry::getValue)
+				// enrich metrics with customers and transform them to EnrichedMetric
+				.hashJoin(customerEntries, JoinClause.joinMapEntries(Metric::getCustomerId), EnrichedMetric::new);
 
-		dag
-				.edge(Edge.between(source, valueMapper))
-				.edge(Edge.between(valueMapper, enricher))
-				// we need to control the ordinal of the output here to send items to the right output
-				.edge(Edge.from(enricher, MetricEnricher.NORMAL_OUTPUT_ORDINAL).to(outputMapper))
-				.edge(Edge.between(outputMapper, output))
-				// the enricher will dispatch items between normal and error output
-				.edge(Edge.from(enricher, MetricEnricher.ERROR_OUTPUT_ORDINAL).to(errorOutput));
+		// normal workflow
+		enrichedStage
+				// filter valid data
+				.filter((EnrichedMetric::isEnriched))
+				// transform EnrichedMetric to Map entry
+				.map(m -> new AbstractMap.SimpleEntry<>(m.getMetric().getTimestampMs(), m))
+				// output to map
+				.drainTo(Sinks.map(OUTPUT_MAP_NAME));
+
+		// output errors to another map
+		enrichedStage
+				// filter error data
+				.filter(enrichedMetric -> !enrichedMetric.isEnriched())
+				// transform to map entry
+				.map(m -> new AbstractMap.SimpleEntry<>(m.getMetric().getTimestampMs(), m.getMetric()))
+				// output to error map
+				.drainTo(Sinks.map(ERROR_OUTPUT_MAP_NAME));
 
 		// execute the graph and wait for completion
-		jet.newJob(dag).execute().get();
+		jet.newJob(p).join();
 
 		// get output maps size
 		final int normalCount = jet.getMap(OUTPUT_MAP_NAME).size();

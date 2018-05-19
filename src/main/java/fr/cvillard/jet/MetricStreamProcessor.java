@@ -4,17 +4,20 @@ import com.hazelcast.core.EntryView;
 import com.hazelcast.core.IAtomicReference;
 import com.hazelcast.core.IMap;
 import com.hazelcast.core.IQueue;
-import com.hazelcast.jet.DAG;
-import com.hazelcast.jet.Edge;
+import com.hazelcast.jet.IMapJet;
 import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
-import com.hazelcast.jet.Vertex;
-import com.hazelcast.jet.processor.Processors;
-import com.hazelcast.jet.processor.Sinks;
-import com.hazelcast.jet.stream.IStreamMap;
+import com.hazelcast.jet.core.ProcessorMetaSupplier;
+import com.hazelcast.jet.pipeline.BatchStage;
+import com.hazelcast.jet.pipeline.JoinClause;
+import com.hazelcast.jet.pipeline.Pipeline;
+import com.hazelcast.jet.pipeline.Sinks;
+import com.hazelcast.jet.pipeline.Sources;
+import com.hazelcast.jet.pipeline.StreamStage;
 import com.hazelcast.logging.ILogger;
 
 import java.util.AbstractMap;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -115,32 +118,41 @@ public class MetricStreamProcessor {
 		logger.info("Input generator started");
 
 		// treatment dag
-		DAG dag = new DAG();
-		// read input queue as stream
-		Vertex source = dag.newVertex("source", () -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME));
-		// enrich metric with Customer and transform to EnrichedMetric
-		Vertex enricher = dag.newVertex("enricher", () -> new MetricEnricher(CUSTOMER_MAP_NAME));
-		// transform EnrichedMetric to Map entry
-		Vertex outputMapper = dag.newVertex("outputMapper",
-				Processors.map((EnrichedMetric m) -> new AbstractMap.SimpleEntry<>(m.getMetric().getTimestampMs(), m)));
-		// output to map
-		Vertex output = dag.newVertex("output", Sinks.writeMap(OUTPUT_MAP_NAME));
-		// output errors to another map
-		Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap(ERROR_OUTPUT_MAP_NAME));
+		Pipeline pipeline = Pipeline.create();
+		// prepare customer enrichment
+		// WARN: the full content of this map will be processed and stored in hashmaps on all the nodes, to make the hash join fast
+		// do not forget to consider this when estimating RAM consumption of the Job
+		BatchStage<Map.Entry<Integer, Customer>> customerEntries = pipeline.drawFrom(Sources.map(CUSTOMER_MAP_NAME));
+		StreamStage<EnrichedMetric> enrichedStage = pipeline
+				// read input queue as stream
+				.<Metric>drawFrom(Sources.streamFromProcessor("source",
+						ProcessorMetaSupplier.of(() -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME), 1)))
+				// enrich metric with Customer and transform to EnrichedMetric
+				.hashJoin(customerEntries, JoinClause.joinMapEntries(Metric::getCustomerId), EnrichedMetric::new);
 
-		dag
-				.edge(Edge.between(source, enricher))
-				// we need to control the ordinal of the output here to send items to the right output
-				.edge(Edge.from(enricher, MetricEnricher.NORMAL_OUTPUT_ORDINAL).to(outputMapper))
-				.edge(Edge.between(outputMapper, output))
-				// the enricher will dispatch items between normal and error output
-				.edge(Edge.from(enricher, MetricEnricher.ERROR_OUTPUT_ORDINAL).to(errorOutput));
+		// normal workflow
+		enrichedStage
+				// filter valid data
+				.filter((EnrichedMetric::isEnriched))
+				// transform EnrichedMetric to Map entry
+				.map(m -> new AbstractMap.SimpleEntry<>(m.getMetric().getTimestampMs(), m))
+				// output to map
+				.drainTo(Sinks.map(OUTPUT_MAP_NAME));
+
+		// output errors to another map
+		enrichedStage
+				// filter error data
+				.filter(enrichedMetric -> !enrichedMetric.isEnriched())
+				// transform to map entry
+				.map(m -> new AbstractMap.SimpleEntry<>(m.getMetric().getTimestampMs(), m.getMetric()))
+				// output to error map
+				.drainTo(Sinks.map(ERROR_OUTPUT_MAP_NAME));
 
 		// execute the graph and DO NOT wait for completion
-		Future<Void> job = jet.newJob(dag).execute();
+		Future<Void> job = jet.newJob(pipeline).getFuture();
 
-		IStreamMap<Long, EnrichedMetric> outputMap = jet.getMap(OUTPUT_MAP_NAME);
-		IStreamMap errorMap = jet.getMap(ERROR_OUTPUT_MAP_NAME);
+		IMapJet<Long, EnrichedMetric> outputMap = jet.getMap(OUTPUT_MAP_NAME);
+		IMapJet errorMap = jet.getMap(ERROR_OUTPUT_MAP_NAME);
 
 		int receivedItems = 0;
 		while (receivedItems < NB_ITEMS) {

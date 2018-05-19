@@ -24,6 +24,14 @@ public class EnrichedMetric implements DataSerializable {
 	}
 
 	/**
+	 * Check if the metric has been correctly enriched (ie. the customer is present)
+	 * @return true if the customer is present, false otherwise
+	 */
+	public boolean isEnriched() {
+		return customer != null;
+	}
+
+	/**
 	 * @return customer
 	 */
 	public Customer getCustomer() {

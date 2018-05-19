@@ -2,7 +2,7 @@ package fr.cvillard.jet;
 
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.IMap;
-import com.hazelcast.jet.AbstractProcessor;
+import com.hazelcast.jet.core.AbstractProcessor;
 
 import javax.annotation.Nonnull;
 import java.util.AbstractMap;
@@ -30,7 +30,7 @@ public class MetricEnricher extends AbstractProcessor {
 	private String customerMapName;
 
 	@Override
-	protected void init(@Nonnull Context context) throws Exception {
+	protected void init(@Nonnull Context context) {
 		HazelcastInstance hzInstance = context.jetInstance().getHazelcastInstance();
 		customerMap = hzInstance.getMap(customerMapName);
 	}
@@ -40,7 +40,7 @@ public class MetricEnricher extends AbstractProcessor {
 	}
 
 	@Override
-	protected boolean tryProcess0(@Nonnull Object item) throws Exception {
+	protected boolean tryProcess0(@Nonnull Object item) {
 		// since the source vertex reads a map, the item must be of Map.Entry type
 		if (item instanceof Metric) {
 			Metric metric = (Metric) item;

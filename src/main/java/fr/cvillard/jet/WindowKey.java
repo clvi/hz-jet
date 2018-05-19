@@ -1,6 +1,6 @@
 package fr.cvillard.jet;
 
-import com.hazelcast.jet.TimestampedEntry;
+import com.hazelcast.jet.datamodel.TimestampedEntry;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.DataSerializable;

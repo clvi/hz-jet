@@ -7,7 +7,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <hazelcast.version>0.4</hazelcast.version>
+        <hazelcast.version>0.6.1</hazelcast.version>
     </properties>
 
     <build>

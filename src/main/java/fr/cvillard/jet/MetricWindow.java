@@ -2,32 +2,19 @@ package fr.cvillard.jet;
 
 import com.hazelcast.core.IAtomicReference;
 import com.hazelcast.core.IQueue;
-import com.hazelcast.jet.AggregateOperation;
-import com.hazelcast.jet.DAG;
-import com.hazelcast.jet.Edge;
 import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
-import com.hazelcast.jet.Partitioner;
-import com.hazelcast.jet.TimestampKind;
-import com.hazelcast.jet.TimestampedEntry;
-import com.hazelcast.jet.Vertex;
-import com.hazelcast.jet.WatermarkEmissionPolicy;
-import com.hazelcast.jet.WatermarkPolicies;
-import com.hazelcast.jet.WindowDefinition;
-import com.hazelcast.jet.processor.DiagnosticProcessors;
-import com.hazelcast.jet.processor.Processors;
-import com.hazelcast.jet.processor.Sinks;
-import com.hazelcast.jet.stream.IStreamMap;
+import com.hazelcast.jet.core.ProcessorMetaSupplier;
+import com.hazelcast.jet.pipeline.Pipeline;
+import com.hazelcast.jet.pipeline.Sources;
+import com.hazelcast.jet.pipeline.StreamStage;
 import com.hazelcast.logging.ILogger;
 
-import java.util.AbstractMap;
+import java.nio.channels.Pipe;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Perform simple Customer enrichment on a stream of Metrics.
@@ -127,69 +114,72 @@ public class MetricWindow {
 
 		logger.info("Input generator started");
 
-		// treatment dag
-		DAG dag = new DAG();
+		// treatment pipeline
+		Pipeline pipeline = Pipeline.create();
 		// read input queue as stream
-		Vertex source = dag.newVertex("source", () -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME));
+		StreamStage<Metric> enrichedStage = pipeline
+				// read input queue as stream
+				.<Metric>drawFrom(Sources.streamFromProcessor("source",
+						ProcessorMetaSupplier.of(() -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME), 1)));
+//
+// 		Vertex watermark = dag.newVertex("wm", Processors.insertWatermarks(Metric::getTimestampMs,
+//				// The watermark is always the given lag (in ms) behind the soonest observed timestamp
+//				WatermarkPolicies.withFixedLag(WATERMARK_LAG_MS),
+//				// Ensure each new watermark has at least the given difference with the previous one
+//				WatermarkEmissionPolicy.emitByMinStep(WATERMARK_MIN_STEP)));
+//
+//		AggregateOperation<Metric, DropCountAccumulator, WindowValue> op = AggregateOperation.of(
+//				DropCountAccumulator::new,
+//				(a, item) -> a.add(item.getNumberOfCalls(), item.getNumberOfErrors()),
+//				DropCountAccumulator::combine,
+//				DropCountAccumulator::deduct,
+//				DropCountAccumulator::total
+//		);
+//		// produces TimestampedEntry<Integer, WindowValue>
+//		Vertex aggregate = dag.newVertex("aggregator",
+//				Processors.aggregateToSlidingWindow(
+//						Metric::getCustomerId,
+//						Metric::getTimestampMs,
+//						TimestampKind.EVENT,
+//						WindowDefinition.slidingWindowDef(SLIDING_WINDOW_LENGTH_MS, SLIDING_WINDOW_STEP_MS),
+//						op
+//				));
+//
+//		Vertex map = dag.newVertex("mapper",
+//				Processors.map((TimestampedEntry<Integer, Double> te) ->
+//								new AbstractMap.SimpleEntry<>(new WindowKey(te), te.getValue())));
+//
+//		// The peekInput logs all messages coming into the output vertex
+//		Vertex output = dag.newVertex("output", DiagnosticProcessors.peekInput(Sinks.writeMap(OUTPUT_MAP_NAME)));
+//
+//		dag
+//				.edge(Edge.between(source, watermark).isolated())
+//				.edge(Edge.between(watermark, aggregate).partitioned(Metric::getCustomerId, Partitioner.HASH_CODE).distributed())
+//				.edge(Edge.between(aggregate, map).isolated())
+//				.edge(Edge.between(map, output));
+//
+//		// execute the graph and DO NOT wait for completion
+//		Future<Void> job = jet.newJob(dag).execute();
+//
+//		IStreamMap<WindowKey, WindowValue> outputMap = jet.getMap(OUTPUT_MAP_NAME);
 
-		Vertex watermark = dag.newVertex("wm", Processors.insertWatermarks(Metric::getTimestampMs,
-				// The watermark is always the given lag (in ms) behind the soonest observed timestamp
-				WatermarkPolicies.withFixedLag(WATERMARK_LAG_MS),
-				// Ensure each new watermark has at least the given difference with the previous one
-				WatermarkEmissionPolicy.emitByMinStep(WATERMARK_MIN_STEP)));
-
-		AggregateOperation<Metric, DropCountAccumulator, WindowValue> op = AggregateOperation.of(
-				DropCountAccumulator::new,
-				(a, item) -> a.add(item.getNumberOfCalls(), item.getNumberOfErrors()),
-				DropCountAccumulator::combine,
-				DropCountAccumulator::deduct,
-				DropCountAccumulator::total
-		);
-		// produces TimestampedEntry<Integer, WindowValue>
-		Vertex aggregate = dag.newVertex("aggregator",
-				Processors.aggregateToSlidingWindow(
-						Metric::getCustomerId,
-						Metric::getTimestampMs,
-						TimestampKind.EVENT,
-						WindowDefinition.slidingWindowDef(SLIDING_WINDOW_LENGTH_MS, SLIDING_WINDOW_STEP_MS),
-						op
-				));
-
-		Vertex map = dag.newVertex("mapper",
-				Processors.map((TimestampedEntry<Integer, Double> te) ->
-								new AbstractMap.SimpleEntry<>(new WindowKey(te), te.getValue())));
-
-		// The peekInput logs all messages coming into the output vertex
-		Vertex output = dag.newVertex("output", DiagnosticProcessors.peekInput(Sinks.writeMap(OUTPUT_MAP_NAME)));
-
-		dag
-				.edge(Edge.between(source, watermark).isolated())
-				.edge(Edge.between(watermark, aggregate).partitioned(Metric::getCustomerId, Partitioner.HASH_CODE).distributed())
-				.edge(Edge.between(aggregate, map).isolated())
-				.edge(Edge.between(map, output));
-
-		// execute the graph and DO NOT wait for completion
-		Future<Void> job = jet.newJob(dag).execute();
-
-		IStreamMap<WindowKey, WindowValue> outputMap = jet.getMap(OUTPUT_MAP_NAME);
-
-		// wait for all input items to be consumed
-		while (inputQueue.size() > 0) {
-			Thread.sleep(5000);
-			logger.info("Received items : " + outputMap.size());
-		}
-
-		stopFlag.set(true);
-
-		logger.info("Stop flag set. Waiting for job completion.");
-
-		// wait for job completion
-		try {
-			job.get(1, TimeUnit.MINUTES);
-		} catch (TimeoutException te) {
-			logger.warning("Job failed to complete in timeout, cancelling job.");
-			job.cancel(true);
-		}
+//		// wait for all input items to be consumed
+//		while (inputQueue.size() > 0) {
+//			Thread.sleep(5000);
+//			logger.info("Received items : " + outputMap.size());
+//		}
+//
+//		stopFlag.set(true);
+//
+//		logger.info("Stop flag set. Waiting for job completion.");
+//
+//		// wait for job completion
+//		try {
+//			job.get(1, TimeUnit.MINUTES);
+//		} catch (TimeoutException te) {
+//			logger.warning("Job failed to complete in timeout, cancelling job.");
+//			job.cancel(true);
+//		}
 
 		logger.info("Job complete. Please observe IMap '" + OUTPUT_MAP_NAME + "' for sliding window results.");
 

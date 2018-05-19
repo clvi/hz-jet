@@ -3,7 +3,7 @@ package fr.cvillard.jet;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.IAtomicReference;
 import com.hazelcast.core.IQueue;
-import com.hazelcast.jet.AbstractProcessor;
+import com.hazelcast.jet.core.AbstractProcessor;
 import com.hazelcast.logging.ILogger;
 
 import javax.annotation.Nonnull;
@@ -40,7 +40,7 @@ public class QueuePoller extends AbstractProcessor {
 	private IAtomicReference<Boolean> stopFlag;
 
 	@Override
-	protected void init(@Nonnull Context context) throws Exception {
+	protected void init(@Nonnull Context context) {
 		HazelcastInstance hzInstance = context.jetInstance().getHazelcastInstance();
 		inputQueue = hzInstance.getQueue(inputQueueName);
 		stopFlag = hzInstance.getAtomicReference(stopFlagName);
