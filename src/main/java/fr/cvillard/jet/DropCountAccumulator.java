@@ -1,9 +1,15 @@
 package fr.cvillard.jet;
 
+import com.hazelcast.nio.ObjectDataInput;
+import com.hazelcast.nio.ObjectDataOutput;
+import com.hazelcast.nio.serialization.DataSerializable;
+
+import java.io.IOException;
+
 /**
  * This accumulator is a updated version of {@link java.util.concurrent.atomic.LongAccumulator} that sum 2 Long values
  */
-public class DropCountAccumulator {
+public class DropCountAccumulator implements DataSerializable {
 
 	/**
 	 * The total call count
@@ -73,5 +79,17 @@ public class DropCountAccumulator {
 				"totalCount=" + totalCount +
 				", failedCount=" + failedCount +
 				'}';
+	}
+
+	@Override
+	public void writeData(ObjectDataOutput out) throws IOException {
+		out.writeLong(totalCount);
+		out.writeLong(failedCount);
+	}
+
+	@Override
+	public void readData(ObjectDataInput in) throws IOException {
+		totalCount = in.readLong();
+		failedCount = in.readLong();
 	}
 }

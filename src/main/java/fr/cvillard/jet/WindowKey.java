@@ -6,6 +6,8 @@ import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.DataSerializable;
 
 import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 /**
  * This key is used for the aggregation output map
@@ -28,11 +30,6 @@ public class WindowKey implements DataSerializable {
 	public WindowKey(long timestamp, int customerId) {
 		this.timestamp = timestamp;
 		this.customerId = customerId;
-	}
-
-	public WindowKey(TimestampedEntry<Integer, Double> entry) {
-		this.timestamp = entry.getTimestamp();
-		this.customerId = entry.getKey();
 	}
 
 	/**
@@ -78,7 +75,7 @@ public class WindowKey implements DataSerializable {
 	@Override
 	public String toString() {
 		return "WindowKey{" +
-				"timestamp=" + timestamp +
+				"timestamp=" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(timestamp)) +
 				", customerId=" + customerId +
 				'}';
 	}

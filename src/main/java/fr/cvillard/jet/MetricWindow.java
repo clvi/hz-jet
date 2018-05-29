@@ -2,19 +2,25 @@ package fr.cvillard.jet;
 
 import com.hazelcast.core.IAtomicReference;
 import com.hazelcast.core.IQueue;
+import com.hazelcast.jet.IMapJet;
 import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
+import com.hazelcast.jet.aggregate.AggregateOperation;
 import com.hazelcast.jet.core.ProcessorMetaSupplier;
 import com.hazelcast.jet.pipeline.Pipeline;
+import com.hazelcast.jet.pipeline.Sinks;
 import com.hazelcast.jet.pipeline.Sources;
-import com.hazelcast.jet.pipeline.StreamStage;
+import com.hazelcast.jet.pipeline.WindowDefinition;
 import com.hazelcast.logging.ILogger;
 
-import java.nio.channels.Pipe;
+import java.util.AbstractMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Perform simple Customer enrichment on a stream of Metrics.
@@ -44,27 +50,6 @@ public class MetricWindow {
 	 * The name of the flag used to cleanly stop queue pollers
 	 */
 	private static final String STOP_FLAG_NAME = "stopFlag";
-
-	/**
-	 * The sliding window length in milliseconds
-	 */
-	private static final long SLIDING_WINDOW_LENGTH_MS = 1000;
-
-	/**
-	 * The sliding window step length in milliseconds
-	 */
-	private static final long SLIDING_WINDOW_STEP_MS = 10;
-
-	/**
-	 * The lag between each watermark and the highest observed timestamp, in milliseconds
-	 */
-	private static final long WATERMARK_LAG_MS = 100;
-
-	/**
-	 * The minimal difference between 2 watermarks
-	 */
-	private static final long WATERMARK_MIN_STEP = 100;
-
 	/**
 	 * Launch Jet instance, populate the maps, launch the batch Job to process metrics and check output
 	 *
@@ -117,71 +102,56 @@ public class MetricWindow {
 		// treatment pipeline
 		Pipeline pipeline = Pipeline.create();
 		// read input queue as stream
-		StreamStage<Metric> enrichedStage = pipeline
+		pipeline
 				// read input queue as stream
 				.<Metric>drawFrom(Sources.streamFromProcessor("source",
-						ProcessorMetaSupplier.of(() -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME), 1)));
-//
-// 		Vertex watermark = dag.newVertex("wm", Processors.insertWatermarks(Metric::getTimestampMs,
-//				// The watermark is always the given lag (in ms) behind the soonest observed timestamp
-//				WatermarkPolicies.withFixedLag(WATERMARK_LAG_MS),
-//				// Ensure each new watermark has at least the given difference with the previous one
-//				WatermarkEmissionPolicy.emitByMinStep(WATERMARK_MIN_STEP)));
-//
-//		AggregateOperation<Metric, DropCountAccumulator, WindowValue> op = AggregateOperation.of(
-//				DropCountAccumulator::new,
-//				(a, item) -> a.add(item.getNumberOfCalls(), item.getNumberOfErrors()),
-//				DropCountAccumulator::combine,
-//				DropCountAccumulator::deduct,
-//				DropCountAccumulator::total
-//		);
-//		// produces TimestampedEntry<Integer, WindowValue>
-//		Vertex aggregate = dag.newVertex("aggregator",
-//				Processors.aggregateToSlidingWindow(
-//						Metric::getCustomerId,
-//						Metric::getTimestampMs,
-//						TimestampKind.EVENT,
-//						WindowDefinition.slidingWindowDef(SLIDING_WINDOW_LENGTH_MS, SLIDING_WINDOW_STEP_MS),
-//						op
-//				));
-//
-//		Vertex map = dag.newVertex("mapper",
-//				Processors.map((TimestampedEntry<Integer, Double> te) ->
-//								new AbstractMap.SimpleEntry<>(new WindowKey(te), te.getValue())));
-//
-//		// The peekInput logs all messages coming into the output vertex
-//		Vertex output = dag.newVertex("output", DiagnosticProcessors.peekInput(Sinks.writeMap(OUTPUT_MAP_NAME)));
-//
-//		dag
-//				.edge(Edge.between(source, watermark).isolated())
-//				.edge(Edge.between(watermark, aggregate).partitioned(Metric::getCustomerId, Partitioner.HASH_CODE).distributed())
-//				.edge(Edge.between(aggregate, map).isolated())
-//				.edge(Edge.between(map, output));
-//
-//		// execute the graph and DO NOT wait for completion
-//		Future<Void> job = jet.newJob(dag).execute();
-//
-//		IStreamMap<WindowKey, WindowValue> outputMap = jet.getMap(OUTPUT_MAP_NAME);
+						ProcessorMetaSupplier.of(() -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME), 1)))
+				// add timestamps to events. Auto-generate watermarks
+				.addTimestamps()
+				// define the sliding window length and refresh rate
+				.window(WindowDefinition.sliding(TimeUnit.SECONDS.toMillis(1), TimeUnit.MILLISECONDS.toMillis(10)))
+				// group event per customer
+				.groupingKey(Metric::getCustomerId)
+				// define a custom aggregator to count success and failure of calls
+				.aggregate(AggregateOperation
+						.withCreate(DropCountAccumulator::new)
+						.andAccumulate((DropCountAccumulator a, Metric item) -> a.add(item.getNumberOfCalls(), item.getNumberOfErrors()))
+						.andCombine(DropCountAccumulator::combine)
+						.andDeduct(DropCountAccumulator::deduct)
+						.andFinish(DropCountAccumulator::total)
+				)
+				// transform the result to write it to a map
+				.map((windowValue) -> new AbstractMap.SimpleEntry<>(
+						new WindowKey(windowValue.getTimestamp(), windowValue.getKey()), windowValue.getValue()))
+				// output to the map
+				.drainTo(Sinks.map(OUTPUT_MAP_NAME));
 
-//		// wait for all input items to be consumed
-//		while (inputQueue.size() > 0) {
-//			Thread.sleep(5000);
-//			logger.info("Received items : " + outputMap.size());
-//		}
-//
-//		stopFlag.set(true);
-//
-//		logger.info("Stop flag set. Waiting for job completion.");
-//
-//		// wait for job completion
-//		try {
-//			job.get(1, TimeUnit.MINUTES);
-//		} catch (TimeoutException te) {
-//			logger.warning("Job failed to complete in timeout, cancelling job.");
-//			job.cancel(true);
-//		}
+		// execute the graph and DO NOT wait for completion
+		Future<Void> job = jet.newJob(pipeline).getFuture();
+
+		IMapJet<WindowKey, WindowValue> outputMap = jet.getMap(OUTPUT_MAP_NAME);
+
+		// wait for all input items to be consumed
+		while (inputQueue.size() > 0) {
+			Thread.sleep(5000);
+			logger.info("Received items : " + outputMap.size());
+		}
+
+		stopFlag.set(true);
+
+		logger.info("Stop flag set. Waiting for job completion.");
+
+		// wait for job completion
+		try {
+			job.get(1, TimeUnit.MINUTES);
+		} catch (TimeoutException te) {
+			logger.warning("Job failed to complete in timeout, cancelling job.");
+			job.cancel(true);
+		}
 
 		logger.info("Job complete. Please observe IMap '" + OUTPUT_MAP_NAME + "' for sliding window results.");
+
+		outputMap.forEach((key, value) -> System.out.println(key + " : " + value));
 
 		logger.info("Terminating Jet instances.");
 
