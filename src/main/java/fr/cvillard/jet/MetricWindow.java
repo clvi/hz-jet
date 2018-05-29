@@ -109,13 +109,13 @@ public class MetricWindow {
 				// add timestamps to events. Auto-generate watermarks
 				.addTimestamps()
 				// define the sliding window length and refresh rate
-				.window(WindowDefinition.sliding(TimeUnit.SECONDS.toMillis(1), TimeUnit.MILLISECONDS.toMillis(10)))
+				.window(WindowDefinition.sliding(TimeUnit.HOURS.toMillis(1), TimeUnit.MINUTES.toMillis(10)))
 				// group event per customer
 				.groupingKey(Metric::getCustomerId)
 				// define a custom aggregator to count success and failure of calls
 				.aggregate(AggregateOperation
 						.withCreate(DropCountAccumulator::new)
-						.andAccumulate((DropCountAccumulator a, Metric item) -> a.add(item.getNumberOfCalls(), item.getNumberOfErrors()))
+						.<Metric>andAccumulate((a, item) -> a.add(item.getNumberOfCalls(), item.getNumberOfErrors()))
 						.andCombine(DropCountAccumulator::combine)
 						.andDeduct(DropCountAccumulator::deduct)
 						.andFinish(DropCountAccumulator::total)

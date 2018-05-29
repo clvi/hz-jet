@@ -54,6 +54,15 @@
           float: right;
           width: 320px;
       }
+
+      table.window-result {
+          border-collapse: collapse;
+      }
+
+      table.window-result td, th {
+          border: 1px solid black;
+          padding: 5px;
+      }
     </style>
   </head>
   <body>
@@ -155,13 +164,7 @@ class: center, middle
 
 * Garantie de traitement "au moins 1", "exactement 1" ou "au mieux" des messages
 
-v0.7 :
-
-* Outils de diagnostic et de monitoring
-
-* Scaling dynamique
-
-* Rolling job updates
+* Support cloud (Pivotal Cloud Foundry) et Docker
 
 ???
 
@@ -181,6 +184,14 @@ Sliding Windows: Calcul de valeurs aggrégées sur des fenêtres de temps glissa
 
 * APIs instables jusqu'à la v1.0
 
+v0.7 :
+
+* Outils de diagnostic et de monitoring
+
+* Scaling dynamique
+
+* Rolling job updates
+
 ---
 
 class: center, middle
@@ -196,77 +207,48 @@ class: center, middle
 # DAG
 
 ```java
-DAG dag = new DAG();
-
-// Création des noeuds de traitement
-Vertex source = dag.newVertex("source", Sources.readMap("inputMap"));
-
-Vertex enricher = dag.newVertex("enricher", MetricEnricher::new);
-
-Vertex output = dag.newVertex("output", Sinks.writeMap("outputMap"));
-Vertex errorOutput = dag.newVertex("errorOutput", Sinks.writeMap("errorOutputMap"));
+Pipeline p = Pipeline.create();
+// Definition de la source de données de Customer
+BatchStage<Map.Entry<Integer, Customer>> customerEntries = p.drawFrom(Sources.map(CUSTOMER_MAP_NAME));
+// lecture de la source et enrichissement
+BatchStage<EnrichedMetric> enrichedStage = p
+        .drawFrom(Sources.<String, Metric>map(SOURCE_MAP_NAME))
+        .hashJoin(customerEntries, JoinClause.joinMapEntries(Metric::getCustomerId), EnrichedMetric::new);
 ```
 
 ```java
-// Création des arêtes du graphe entre les noeuds
-dag
-        .edge(Edge.between(source, enricher))
-        .edge(Edge.from(enricher, 0).to(output))
-        .edge(Edge.from(enricher, 1).to(errorOutput));
+// les données valides vont dans une Map de sortie
+enrichedStage
+        .filter((EnrichedMetric::isEnriched))
+        .drainTo(Sinks.map(OUTPUT_MAP_NAME));
 ```
 
 ```java
-// Démarrage de Jet
-JetInstance jet = Jet.newJetInstance();
-
-// Démarrage du Job et attente du résultat
-jet.newJob(dag).execute().get();
+// les données en erreur vont dans une Map d'erreur
+enrichedStage
+        .filter(enrichedMetric -> !enrichedMetric.isEnriched())
+        .drainTo(Sinks.map(ERROR_OUTPUT_MAP_NAME));
+```
+```java
+// Execution du pipeline et attente du résultat
+jet.newJob(p).join();
 ```
 
 ???
 
-On peut choisir l'indice de chaque entrée et sortie des noeuds.
+Le fait de définir plusieurs opérations à une même étape crée un flux en Y.
 
-Utile quand un noeud a plusieurs entrées ou sorties.
+Le chargement de la Map de Customer provoque sa lecture intégrale au démarrage et son stockage sous forme de table de hashage sur chaque noeud
 
-`between` fix les ID d'entrée et sortie à 0.
+Attention à la mémoire !
 
 ---
 
-.dag-icon[![DAG](images/dag.png)]
+# Stream Processing
 
-# Processor
-
-```java
-public class MetricEnricher extends AbstractProcessor {
-
-	// ...
-
-	@Override
-	protected boolean tryProcess0(@Nonnull Object item) throws Exception {
-
-        Metric metric = (Metric) item;
-
-        // ... on fait des traitements
-
-        // Arête 0 ou 1 selon que le traitement s'est terminé en succès ou non
-        int index = (error ? 1 : 0);
-
-        // si la sortie est surchargée, tryEmit renverra false
-        boolean emissionSucceeded = tryEmit(index, metric);
-
-        // le process sera retenté si on retourne false
-        return emissionSucceeded;
-	}
-}
-```
-
-???
-
-`tryEmit` renvoie `false` si l'output concerné est plein et ne peut accepter de nouvel item. Le moteur va flusher l'output
-concerné, puis soumettre de nouveau l'item en entrée du `Processor`.
-
-Il faudrait ajouter un contrôle avant de caster.
+.center[
+![DAG](images/dag-stream.png)
+]
 
 ---
 
@@ -306,6 +288,30 @@ Si le poller retourne `false` il sera rappelé par le moteur jusqu'à ce qu'il r
 
 ---
 
+.dag-icon[![DAG](images/dag-stream.png)]
+
+# Stream processing
+
+```java
+Pipeline pipeline = Pipeline.create();
+BatchStage<Map.Entry<Integer, Customer>> customerEntries = pipeline.drawFrom(Sources.map(CUSTOMER_MAP_NAME));
+
+StreamStage<EnrichedMetric> enrichedStage = pipeline
+        // Utilisation du poller pour lire la queue
+        .<Metric>drawFrom(Sources.streamFromProcessor("source",
+                ProcessorMetaSupplier.of(() -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME), 1)))
+
+        .hashJoin(customerEntries, JoinClause.joinMapEntries(Metric::getCustomerId), EnrichedMetric::new);
+```
+
+[...]
+
+```java
+// On execute le graph sans attendre le résultat
+Future<Void> job = jet.newJob(pipeline).getFuture();
+```
+---
+
 # Performances
 
 * Intel® Core™ i7-5600U CPU @ 2.60GHz × 4
@@ -330,20 +336,144 @@ Latence moyenne : **2 ms**, latence max. sur 100 000 éléments : **27 ms**
 
 ---
 
-# Limitations
-
-
-* Qualité de la documentation...
-
-* Pas de typage des entrées, sorties, ou arêtes entre noeuds, tout est `Object`.
+# Performances comparées - Throughput
 
 .center[
-![Type casting everywhere](images/type-casting-type-casting-everywhere.jpg)
+![word count bench](images/wordcount-bench.png)
 ]
 
 ???
 
-Tous les vertex recoivent des `Object`s comme unique type manipulé, le type réel doit donc toujours être contrôlé manuellement
+Jet v0.4
+
+---
+
+# Performances comparées - Latence
+
+.center[
+![latency bench](images/latency-bench.png)
+]
+
+???
+
+Jet v0.4
+
+---
+
+# Fenêtre glissante
+
+```java
+public class Metric {
+
+    // date de la métrique
+	private long timestampMs;
+
+    // identifiant du client
+	private int customerId;
+
+    // nombre d'appels passés
+	private int numberOfCalls;
+
+    // nombre d'appels ayant échoué
+	private int numberOfErrors;
+}
+```
+
+Objectif : Connaître sur une fenêtre de temps glissante le nombre total d'appels et d'erreurs rencontrés par chaque client.
+
+---
+
+# Fenêtre glissante
+
+```java
+Pipeline pipeline = Pipeline.create();
+pipeline.<Metric>drawFrom(Sources.streamFromProcessor("source",
+                ProcessorMetaSupplier.of(() -> new QueuePoller(SOURCE_QUEUE_NAME, STOP_FLAG_NAME), 1)))
+
+        // ajoute des timestamps et des watermarks aux évènements
+        .addTimestamps()
+
+        // détermine le type de fenêtre, sa largeur (1H) et sa fréquence de mise à jour (10 min)
+        .window(WindowDefinition.sliding(TimeUnit.HOURS.toMillis(1), TimeUnit.MINUTES.toMillis(10)))
+
+        // les évènements doivent être groupés par Customer
+        .groupingKey(Metric::getCustomerId)
+
+        // On aggrège à la fois le total et le nombre d'erreurs
+        .aggregate(AggregateOperation
+                .withCreate(DropCountAccumulator::new)
+                .<Metric>andAccumulate((acc, item) -> acc.add(item.getNumberOfCalls(), item.getNumberOfErrors()))
+                .andCombine(DropCountAccumulator::combine)
+                .andDeduct(DropCountAccumulator::deduct)
+                .andFinish(DropCountAccumulator::total)
+        )
+        .drainTo(Sinks.map(OUTPUT_MAP_NAME));
+```
+
+```java
+Future<Void> job = jet.newJob(pipeline).getFuture();
+```
+
+---
+
+# Fenêtre glissante
+
+```java
+.aggregate(AggregateOperation
+    .withCreate(DropCountAccumulator::new)
+
+    // Integrer un nouvel item dans l'accumulateur
+    // this.totalCount += newTotalCount; this.failedCount += newFailedCount;
+    .<Metric>andAccumulate((acc, item) -> acc.add(item.getNumberOfCalls(), item.getNumberOfErrors()))
+
+    // combiner 2 accumulateurs
+    // this.totalCount += that.totalCount; this.failedCount += that.failedCount;
+    .andCombine(DropCountAccumulator::combine)
+
+    // retirer un accumulateur d'un autre (décalage de la fenêtre)
+    // this.totalCount -= that.totalCount; this.failedCount -= that.failedCount;
+    .andDeduct(DropCountAccumulator::deduct)
+
+    // extraire la valeur de l'accumulateur lorsque la fenêtre est figée
+    // return new Result(totalCount, failedCount);
+    .andFinish(DropCountAccumulator::total)
+)
+
+```
+
+---
+
+# Fenêtre glissante
+
+Exemple de résultat :
+
+<table class="window-result">
+<tr><th>Date</th><th>ID Client</th><th>Nombre d'appels</th><th>Nombre d'erreurs</th></tr>
+<tr><td>2018-05-29 20:10:00</td><td>3</td><td>124</td><td>46</td></tr>
+<tr><td>2018-05-29 20:20:00</td><td>3</td><td>179</td><td>62</td></tr>
+<tr><td>2018-05-29 20:30:00</td><td>3</td><td>223</td><td>71</td></tr>
+
+<tr><td>2018-05-29 20:10:00</td><td>11</td><td>103</td><td>31</td></tr>
+<tr><td>2018-05-29 20:20:00</td><td>11</td><td>132</td><td>46</td></tr>
+<tr><td>2018-05-29 20:30:00</td><td>11</td><td>216</td><td>66</td></tr>
+</table>
+
+```java
+.window(WindowDefinition.sliding(TimeUnit.HOURS.toMillis(1), TimeUnit.MINUTES.toMillis(10)))
+```
+
+"Toutes les 10 minutes, donne les valeurs agrégées sur la dernière heure"
+
+---
+
+# Limitations
+
+
+* Lisibilité des pipelines complexes
+
+* Complexité de l'API
+
+* Supervision et monitoring
 
 ---
 
