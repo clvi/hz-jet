@@ -204,6 +204,105 @@ class: center, middle
 
 .dag-icon[![DAG](images/dag.png)]
 
+# Pool de thread Java
+
+```java
+// Pool de threads Java
+ExecutorService executor = Executors.newFixedThreadPool(nbCPUs * 2);
+
+List<Future<?>> futureList = new ArrayList<>(NB_ITEMS);
+
+for(String key : inputMap.keySet()) {
+    futureList.add(executor.submit(new MetricLocalProcessor(hzInstance, key)));
+}
+
+for (Future<?> pendingResult : futureList) {
+    pendingResult.get();
+}
+```
+
+---
+
+.dag-icon[![DAG](images/dag.png)]
+
+# Pool de thread Java
+
+```java
+public class MetricLocalProcessor implements Runnable {
+
+	private HazelcastInstance hzInstance;
+	private String key;
+
+	@Override
+	public void run() {
+		IMap<Integer, Customer> customerMap = hzInstance.getMap(CUSTOMER_MAP_NAME);
+		IMap<String, Metric> metricMap = hzInstance.getMap(SOURCE_MAP_NAME);
+		IMap<Long, EnrichedMetric> outputMap = hzInstance.getMap(OUTPUT_MAP_NAME);
+		IMap<Long, Metric> errorMap = hzInstance.getMap(ERROR_OUTPUT_MAP_NAME);
+
+		Metric metric = metricMap.get(key);
+		Customer customer = customerMap.get(metric.getCustomerId());
+		if (customer != null) {
+			outputMap.set(metric.getTimestampMs(), new EnrichedMetric(metric, customer));
+		} else {
+			errorMap.set(metric.getTimestampMs(), metric);
+		};
+	}
+}
+
+```
+
+---
+
+# Pool de thread Java - Performances
+
+
+* Intel® Core™ i7-5600U CPU @ 2.60GHz × 4
+
+* 16Go RAM
+
+* Fedora 26 64 bits
+
+* JVM Oracle HotSpot 1.8.0_121
+
+* Configuration d'HazelCast IMDG / Jet par défaut, 2 noeuds locaux
+
+.dag-icon[![DAG](images/dag.png)]
+
+### Temps d'exécution - 1 million d'objets
+
+Local Thread Pool (8 threads) : **90s**, soit environ **11 100 items / seconde**
+
+???
+
+Scalabilité :( :( :(
+
+---
+
+.dag-icon[![DAG](images/dag.png)]
+
+# HazelCast Processor
+
+```java
+// Création de l'instance Hazelcast avec la configuration par défaut
+HazelcastInstance hzInstance = Hazelcast.newHazelcastInstance();
+
+// création d'un thread pool au sein d'Hazelcast
+IExecutorService executor = hzInstance.getExecutorService("enricherThreadPool");
+
+// Execution du processeur sur chaque noeud du cluster
+Map<Member, Future<Void>> pendingResults = executor.submitToAllMembers(new MetricEnrichmentIMDGProcessor());
+
+// attente du résultat
+for (Map.Entry<Member, Future<Void>> pendingResult : pendingResults.entrySet()) {
+    pendingResult.getValue().get();
+}
+```
+
+---
+
+.dag-icon[![DAG](images/dag.png)]
+
 # HazelCast Processor
 
 ```java
@@ -239,114 +338,16 @@ public class MetricEnrichmentIMDGProcessor implements Callable<Void>, HazelcastI
 Utilisation d'un Callable pour pouvoir attendre le résultat.
 
 Runnable = exécution asynchrone sans possibilité de savoir si elle est terminée
----
-
-.dag-icon[![DAG](images/dag.png)]
-
-# HazelCast Processor - Execution
-
-```java
-// Création de l'instance Hazelcast avec la configuration par défaut
-HazelcastInstance hzInstance = Hazelcast.newHazelcastInstance();
-
-// création d'un thread pool au sein d'Hazelcast
-IExecutorService executor = hzInstance.getExecutorService("enricherThreadPool");
-
-// Execution du processeur sur chaque noeud du cluster
-Map<Member, Future<Void>> pendingResults = executor.submitToAllMembers(new MetricEnrichmentIMDGProcessor());
-
-// attente du résultat
-for (Map.Entry<Member, Future<Void>> pendingResult : pendingResults.entrySet()) {
-    pendingResult.getValue().get();
-}
-```
 
 ---
-
-.dag-icon[![DAG](images/dag.png)]
 
 # HazelCast Processor - Performances
 
-
-* Intel® Core™ i7-5600U CPU @ 2.60GHz × 4
-
-* 16Go RAM
-
-* Fedora 26 64 bits
-
-* JVM Oracle HotSpot 1.8.0_121
-
-* Configuration de Jet par défaut, 2 noeuds locaux
+.dag-icon[![DAG](images/dag.png)]
 
 ### Temps d'exécution - 1 million d'objets
 
 **100s**, soit environ **10 000 items / seconde**
-
----
-
-.dag-icon[![DAG](images/dag.png)]
-
-# Pool de thread Java
-
-```java
-public class MetricLocalProcessor implements Runnable {
-
-	private HazelcastInstance hzInstance;
-	private String key;
-
-	@Override
-	public void run() {
-		IMap<Integer, Customer> customerMap = hzInstance.getMap(CUSTOMER_MAP_NAME);
-		IMap<String, Metric> metricMap = hzInstance.getMap(SOURCE_MAP_NAME);
-		IMap<Long, EnrichedMetric> outputMap = hzInstance.getMap(OUTPUT_MAP_NAME);
-		IMap<Long, Metric> errorMap = hzInstance.getMap(ERROR_OUTPUT_MAP_NAME);
-
-		Metric metric = metricMap.get(key);
-		Customer customer = customerMap.get(metric.getCustomerId());
-		if (customer != null) {
-			outputMap.set(metric.getTimestampMs(), new EnrichedMetric(metric, customer));
-		} else {
-			errorMap.set(metric.getTimestampMs(), metric);
-		};
-	}
-}
-
-```
-
----
-
-.dag-icon[![DAG](images/dag.png)]
-
-# Pool de thread Java - Execution
-
-```java
-// Pool de threads Java
-ExecutorService executor = Executors.newFixedThreadPool(nbCPUs * 2);
-
-List<Future<?>> futureList = new ArrayList<>(NB_ITEMS);
-
-for(String key : inputMap.keySet()) {
-    futureList.add(executor.submit(new MetricLocalProcessor(hzInstance, key)));
-}
-
-for (Future<?> pendingResult : futureList) {
-    pendingResult.get();
-}
-```
-
----
-
-.dag-icon[![DAG](images/dag.png)]
-
-# Pool de thread Java - Performances
-
-### Temps d'exécution - 1 million d'objets
-
-Local Thread Pool (8 threads) : **90s**, soit environ **11 100 items / seconde**
-
-???
-
-Scalabilité :( :( :(
 
 ---
 
@@ -516,6 +517,8 @@ Jet v0.4
 
 ---
 
+.dag-icon[![DAG](images/dag-stream.png)]
+
 # Fenêtre glissante
 
 ```java
@@ -538,6 +541,8 @@ public class Metric {
 Objectif : Connaître sur une fenêtre de temps glissante le nombre total d'appels et d'erreurs rencontrés par chaque client.
 
 ---
+
+.dag-icon[![DAG](images/dag-stream.png)]
 
 # Fenêtre glissante
 
@@ -572,6 +577,8 @@ Future<Void> job = jet.newJob(pipeline).getFuture();
 
 ---
 
+.dag-icon[![DAG](images/dag-stream.png)]
+
 # Fenêtre glissante
 
 ```java
@@ -599,6 +606,8 @@ Future<Void> job = jet.newJob(pipeline).getFuture();
 
 ---
 
+.dag-icon[![DAG](images/dag-stream.png)]
+
 # Fenêtre glissante
 
 Exemple de résultat :
@@ -624,6 +633,7 @@ Exemple de résultat :
 
 # Limitations
 
+![HazelCast Jet](images/jet.png)
 
 * Lisibilité des pipelines complexes
 
